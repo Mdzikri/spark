@@ -1,11 +1,17 @@
 import pyspark
 
+postgres_host = "dataeng-postgres"
+postgres_dw_db = "warehouse"
+postgres_user = "user"
+postgres_password = "password"
+
 sparkcontext = pyspark.SparkContext.getOrCreate(
     conf=(pyspark.SparkConf().setAppName("Dibimbing"))
 )
 sparkcontext.setLogLevel("WARN")
 
 spark = pyspark.sql.SparkSession(sparkcontext.getOrCreate())
+
 
 # define schema for purchases dataset
 purchases_schema = (
@@ -66,3 +72,60 @@ merged_df = purchases_df.join(customers_df, "customer_id").join(
     products_df, "product_id"
 )
 merged_df.show()
+
+
+
+merged_df = merged_df.select(
+    "order_id", 
+    "customer_id", 
+    "product_id", 
+    "quantity", 
+    purchases_df.price.alias("purchase_price"), 
+    customers_df.name.alias("customer_name"), 
+    "email", 
+    products_df.name.alias("product_name"), 
+    products_df.price.alias("product_price")
+)
+
+merged_df.show()
+
+
+# jdbc_url = f'jdbc:postgresql://{postgres_host}:5433/warehouse'
+# jdbc_properties = {
+#     'user': postgres_user,
+#     'password': postgres_password,
+#     'driver': 'org.postgresql.Driver',
+#     'stringtype': 'unspecified'
+# }
+
+jdbc_url = f"jdbc:postgresql://{postgres_host}/{postgres_dw_db}"
+jdbc_properties = {
+    "user": postgres_user,
+    "password": postgres_password,
+    "driver": "org.postgresql.Driver",
+    "stringtype": "unspecified",
+}
+
+
+
+merged_df.write \
+    .mode("overwrite") \
+    .jdbc(url=jdbc_url, table='public.real', properties=jdbc_properties)
+
+
+print(jdbc_properties)
+retail_df = spark.read.jdbc(jdbc_url, "public.real", properties=jdbc_properties)
+
+# spark.read.jdbc(url=jdbc_url, table='public.real3', properties=jdbc_properties).show()
+
+(
+    spark
+    .read
+    .jdbc(
+        jdbc_url,
+        'public.real5',
+        properties=jdbc_properties
+    )
+    .show()
+)
+

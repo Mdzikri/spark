@@ -25,3 +25,5 @@ RUN pip install \
     sqlalchemy-bigquery==1.6.1
 
 COPY --chown=airflow:root ./dags /opt/airflow/dags
+
+RUN curl https://jdbc.postgresql.org/download/postgresql-42.2.18.jar -o /opt/airflow/postgresql-42.2.18.jar
