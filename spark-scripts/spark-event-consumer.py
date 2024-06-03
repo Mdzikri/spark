@@ -1,41 +1,76 @@
-import pyspark
 import os
-from dotenv import load_dotenv
-from pathlib import Path
+from pyspark.sql import SparkSession
+from pyspark.sql.functions import *
+from pyspark.sql.types import *
 
-
-dotenv_path = Path("/opt/app/.env")
-load_dotenv(dotenv_path=dotenv_path)
-
-spark_hostname = os.getenv("SPARK_MASTER_HOST_NAME")
-spark_port = os.getenv("SPARK_MASTER_PORT")
-kafka_host = os.getenv("KAFKA_HOST")
-kafka_topic = os.getenv("KAFKA_TOPIC_NAME")
-
-spark_host = f"spark://{spark_hostname}:{spark_port}"
-
-os.environ[
-    "PYSPARK_SUBMIT_ARGS"
-] = "--packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.3.2 org.postgresql:postgresql:42.2.18"
-
-sparkcontext = pyspark.SparkContext.getOrCreate(
-    conf=(pyspark.SparkConf().setAppName("DibimbingStreaming").setMaster(spark_host))
+schema = StructType(
+    [
+        StructField("order_id", StringType(), True),
+        StructField("customer_id", IntegerType(), True),
+        StructField("furniture", StringType(), True),
+        StructField("color", StringType(), True),
+        StructField("price", IntegerType(), True),
+        StructField("ts", LongType(), True),
+    ]
 )
-sparkcontext.setLogLevel("WARN")
-spark = pyspark.sql.SparkSession(sparkcontext.getOrCreate())
+
+spark = (
+    SparkSession.builder.appName("DibimbingStreaming")
+    .config("spark.sql.streaming.checkpointLocation", "/tmp/spark_checkpoint")
+    .getOrCreate()
+)
+
+spark.sparkContext.setLogLevel("ERROR")
 
 stream_df = (
     spark.readStream.format("kafka")
-    .option("kafka.bootstrap.servers", f"{kafka_host}:9092")
-    .option("subscribe", kafka_topic)
+    .option("kafka.bootstrap.servers", "dataeng-kafka:9092")
+    .option("subscribe", "test-topic")
     .option("startingOffsets", "latest")
     .load()
 )
 
-(
+df_finish = (
     stream_df.selectExpr("CAST(value AS STRING)")
-    .writeStream.format("console")
+    .select(from_json(col("value"), schema).alias("data"))
+    .select("data.*")
+)
+
+df_finish = df_finish.withColumn("event_time", to_timestamp(col("ts") / 1000))
+
+# PostgreSQL configuration
+postgres_host = "dataeng-postgres"
+postgres_db = "warehouse"
+postgres_user = "user"
+postgres_password = "password"
+jdbc_url = f"jdbc:postgresql://{postgres_host}/{postgres_db}"
+jdbc_properties = {
+    "user": postgres_user,
+    "password": postgres_password,
+    "driver": "org.postgresql.Driver",
+    "stringtype": "unspecified",
+}
+
+# Define a function to write the dataframe to PostgreSQL
+def write_to_postgres(batch_df, batch_id):
+    batch_df.write.jdbc(url=jdbc_url, table="public.real_time_data2", mode="append", properties=jdbc_properties)
+
+# Start the streaming query and write to PostgreSQL
+query = (
+    df_finish.writeStream
+    .foreachBatch(write_to_postgres)
     .outputMode("append")
     .start()
-    .awaitTermination()
 )
+
+# Start the streaming query to show data in console
+query_console = (
+    df_finish.writeStream
+    .outputMode("append")
+    .format("console")
+    .option("truncate", "false")
+    .start()
+)
+
+query.awaitTermination()
+query_console.awaitTermination()
